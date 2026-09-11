@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 type GameMode = 'ready' | 'playing' | 'paused' | 'over';
 type Point = { x: number; y: number; t: number };
 type Fruit = { id: number; kind: string; x: number; y: number; vx: number; vy: number; radius: number; rotation: number; spin: number; sliced: boolean; bomb: boolean; decorative?: boolean };
-type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string };
+type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string; size?: number; explosive?: boolean };
 
 const FRUITS = ['🍉', '🍊', '🍋', '🍏', '🍑', '🥝', '🍓'];
 const COLORS = ['#ff4d6d', '#ff9e00', '#ffe66d', '#55d66b', '#ff8fab', '#9ad45b'];
@@ -180,16 +180,31 @@ export default function FruitGame() {
     const keyUp = (event: KeyboardEvent) => keys.delete(event.key);
     canvas.addEventListener('pointermove', pointerMove); window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp);
 
-    const spawn = (width: number, height: number, now: number) => {
-      const count = Math.random() > 0.42 ? 2 : 1;
-      for (let i = 0; i < count; i++) { const bomb = scoreRef.current >= 20 && Math.random() < 0.14; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.13 + Math.random() * 0.74), y: height + 48, vx: width * (-0.13 + Math.random() * 0.26), vy: -height * (1.55 + Math.random() * 0.18), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: -2 + Math.random() * 4, sliced: false, bomb }); }
+    const spawn = (width: number, height: number, now: number, elapsed: number) => {
+      const wave = Math.min(3, Math.floor(elapsed / 18));
+      const count = 1 + wave + (Math.random() > .42 ? 1 : 0);
+      const bombChance = elapsed < 9 ? 0 : Math.min(.3, .06 + (elapsed - 9) * .006);
+      for (let i = 0; i < count; i++) { const bomb = Math.random() < bombChance; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.11 + Math.random() * 0.78), y: height + 48, vx: width * (-0.15 + Math.random() * 0.3), vy: -height * (1.55 + Math.random() * 0.18 + wave * .04), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: -2 + Math.random() * 4, sliced: false, bomb }); }
       lastSpawnRef.current = now;
+    };
+    const explodeBomb = (x: number, y: number) => {
+      const blast = ['#fff4a3', '#ffbf38', '#ff673d', '#ff365e', '#ffdf68'];
+      for (let n = 0; n < 44; n++) { const angle = Math.random() * Math.PI * 2, speed = 90 + Math.random() * 390; particleRef.current.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: .5 + Math.random() * .65, size: 3 + Math.random() * 8, color: blast[n % blast.length], explosive: true }); }
     };
     const addMenuFruitBackdrop = (width: number, height: number) => {
       fruitRef.current = FRUITS.slice(0, 5).map((kind, index) => ({ id: idRef.current++, kind, x: width * [0.14, 0.33, 0.7, 0.87, 0.53][index], y: height * [0.26, 0.72, 0.22, 0.66, 0.43][index], vx: 0, vy: 0, radius: Math.max(35, width * [0.055, 0.045, 0.06, 0.048, 0.04][index]), rotation: [-.4, .5, -.22, .36, -.1][index], spin: 0, sliced: false, bomb: false, decorative: true }));
     };
     const drawFruit = (fruit: Fruit) => {
-      if (fruit.bomb) { ctx.font = `${fruit.radius * 1.55}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('💣', 0, 0); return; }
+      if (fruit.bomb) {
+        const r = fruit.radius;
+        const metal = ctx.createRadialGradient(-r * .28, -r * .35, r * .08, 0, 0, r); metal.addColorStop(0, '#758587'); metal.addColorStop(.42, '#354447'); metal.addColorStop(1, '#0b1012');
+        ctx.fillStyle = metal; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#94a5a4'; ctx.lineWidth = Math.max(2, r * .06); ctx.stroke();
+        ctx.fillStyle = '#ffcb3d'; ctx.beginPath(); ctx.arc(-r * .25, -r * .28, r * .13, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#bc6c24'; ctx.lineWidth = Math.max(2, r * .08); ctx.beginPath(); ctx.moveTo(r * .05, -r * .82); ctx.quadraticCurveTo(r * .22, -r * 1.28, r * .54, -r * 1.12); ctx.stroke();
+        ctx.fillStyle = '#ff7a38'; ctx.shadowColor = '#ff4e37'; ctx.shadowBlur = 13; ctx.beginPath(); ctx.arc(r * .56, -r * 1.13, r * .13, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(255,255,255,.17)'; ctx.beginPath(); ctx.arc(-r * .32, -r * .36, r * .18, 0, Math.PI * 2); ctx.fill(); return;
+      }
       const style = FRUIT_STYLES[fruit.kind] || FRUIT_STYLES['🍊'];
       const r = fruit.radius;
       const glow = ctx.createRadialGradient(-r * .25, -r * .35, r * .08, 0, 0, r * 1.25); glow.addColorStop(0, style.accent); glow.addColorStop(.52, style.base); glow.addColorStop(1, '#17231d');
@@ -214,7 +229,9 @@ export default function FruitGame() {
       if (modeRef.current === 'playing') {
         const remaining = Math.max(0, 60 - (time - gameStartedRef.current) / 1000); setTimeLeft(Math.ceil(remaining));
         if (remaining <= 0 || livesRef.current <= 0) finish();
-        if (time - lastSpawnRef.current > 760 / difficulty) spawn(width, height, time);
+        const elapsed = (time - gameStartedRef.current) / 1000;
+        const spawnInterval = Math.max(280, 900 / (difficulty * (1 + elapsed / 28)));
+        if (time - lastSpawnRef.current > spawnInterval) spawn(width, height, time, elapsed);
         if (keys.size) {
           const speed = 0.7 * dt; if (keys.has('ArrowLeft') || keys.has('a')) keyboardPoint.x -= speed; if (keys.has('ArrowRight') || keys.has('d')) keyboardPoint.x += speed; if (keys.has('ArrowUp') || keys.has('w')) keyboardPoint.y -= speed; if (keys.has('ArrowDown') || keys.has('s')) keyboardPoint.y += speed;
           keyboardPoint.x = Math.max(0, Math.min(1, keyboardPoint.x)); keyboardPoint.y = Math.max(0, Math.min(1, keyboardPoint.y)); trailsRef.current[0].push({ ...keyboardPoint, t: time });
@@ -224,7 +241,7 @@ export default function FruitGame() {
           const recent = trail.filter((point) => time - point.t < 230); trail.splice(0, trail.length, ...recent); if (trail.length < 2) return;
           const a = trail[trail.length - 2], b = trail[trail.length - 1]; const speed = Math.hypot((b.x - a.x) * width, (b.y - a.y) * height) / Math.max(8, b.t - a.t); if (speed < 0.48) return;
           fruitRef.current.forEach((fruit) => { if (fruit.sliced || segmentDistance(a, b, fruit.x / width, fruit.y / height) > fruit.radius / Math.min(width, height)) return; fruit.sliced = true;
-            if (fruit.bomb) { livesRef.current = Math.max(0, livesRef.current - 1); setLives(livesRef.current); comboRef.current = 0; setCombo(0); ping(85, 0.25); }
+            if (fruit.bomb) { livesRef.current = Math.max(0, livesRef.current - 1); setLives(livesRef.current); comboRef.current = 0; setCombo(0); explodeBomb(fruit.x, fruit.y); ping(85, 0.25); }
             else { comboRef.current = time - lastSliceRef.current < 850 ? comboRef.current + 1 : 1; lastSliceRef.current = time; scoreRef.current += 10 * Math.min(comboRef.current, 5); setScore(scoreRef.current); setCombo(comboRef.current); ping(460 + comboRef.current * 55); const color = COLORS[Math.floor(Math.random() * COLORS.length)]; for (let n = 0; n < 14; n++) particleRef.current.push({ x: fruit.x, y: fruit.y, vx: -140 + Math.random() * 280, vy: -180 + Math.random() * 250, life: 1, color }); }
           });
         });
@@ -232,7 +249,7 @@ export default function FruitGame() {
 
       fruitRef.current = fruitRef.current.filter((fruit) => fruit.decorative || (!fruit.sliced && fruit.y < height + 140));
       fruitRef.current.forEach((fruit) => { ctx.save(); ctx.translate(fruit.x, fruit.y); ctx.rotate(fruit.rotation); ctx.globalAlpha = fruit.decorative ? .5 : 1; ctx.shadowColor = fruit.bomb ? '#ff4d4d' : 'rgba(0,0,0,.62)'; ctx.shadowBlur = fruit.bomb ? 24 : 18; drawFruit(fruit); ctx.restore(); });
-      particleRef.current.forEach((p) => { p.life -= dt * 1.8; p.vy += 260 * dt; p.x += p.vx * dt; p.y += p.vy * dt; ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 2 + p.life * 4, 0, Math.PI * 2); ctx.fill(); }); ctx.globalAlpha = 1; particleRef.current = particleRef.current.filter((p) => p.life > 0);
+      particleRef.current.forEach((p) => { p.life -= dt * (p.explosive ? 1.15 : 1.8); p.vy += (p.explosive ? 380 : 260) * dt; p.x += p.vx * dt; p.y += p.vy * dt; ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color; if (p.explosive) { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.atan2(p.vy, p.vx)); ctx.fillRect(-(p.size || 5) / 2, -(p.size || 5) / 2, (p.size || 5) * 1.8, p.size || 5); ctx.restore(); } else { ctx.beginPath(); ctx.arc(p.x, p.y, 2 + p.life * 4, 0, Math.PI * 2); ctx.fill(); } }); ctx.globalAlpha = 1; particleRef.current = particleRef.current.filter((p) => p.life > 0);
       trailsRef.current.forEach((trail, trailIndex) => { if (trail.length < 2) return; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; for (let i = 1; i < trail.length; i++) { const alpha = i / trail.length; ctx.strokeStyle = trailIndex ? `rgba(255,94,184,${alpha})` : `rgba(183,255,77,${alpha})`; ctx.lineWidth = 2 + alpha * 9; ctx.beginPath(); ctx.moveTo(trail[i - 1].x * width, trail[i - 1].y * height); ctx.lineTo(trail[i].x * width, trail[i].y * height); ctx.stroke(); } });
       const activeFinger = trailsRef.current[0].at(-1);
       if (cameraOn && activeFinger && time - activeFinger.t < 180) { ctx.save(); ctx.translate(activeFinger.x * width, activeFinger.y * height); ctx.strokeStyle = '#d8ff90'; ctx.fillStyle = 'rgba(183,255,77,.16)'; ctx.lineWidth = 2; ctx.shadowColor = '#b7ff4d'; ctx.shadowBlur = 18; ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.beginPath(); ctx.arc(0, 0, 3.5, 0, Math.PI * 2); ctx.fillStyle = '#f1ffe0'; ctx.fill(); ctx.restore(); }
