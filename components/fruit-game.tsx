@@ -46,6 +46,9 @@ export default function FruitGame() {
   const gameStartedRef = useRef(0);
   const mediaPipeRef = useRef<any>(null);
   const trackingBusyRef = useRef(false);
+  const lastVideoTimeRef = useRef(-1);
+  const smoothedFingerRef = useRef<{ x: number; y: number } | null>(null);
+  const lastFingerSeenRef = useRef(0);
   const audioRef = useRef<AudioContext | null>(null);
   const [mode, setMode] = useState<GameMode>('ready');
   const [score, setScore] = useState(0);
@@ -92,6 +95,7 @@ export default function FruitGame() {
     stream?.getTracks().forEach((track) => track.stop());
     if (videoRef.current) videoRef.current.srcObject = null;
     mediaPipeRef.current?.close?.(); mediaPipeRef.current = null;
+    smoothedFingerRef.current = null; lastVideoTimeRef.current = -1;
     setCameraOn(false); setCameraStatus('off');
   }, []);
 
@@ -109,13 +113,20 @@ export default function FruitGame() {
       }
       const Hands = (window as any).Hands;
       const hands = new Hands({ locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-      hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.55, minTrackingConfidence: 0.5 });
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.38, minTrackingConfidence: 0.38 });
       hands.onResults((results: any) => {
         const now = performance.now();
         (results.multiHandLandmarks || []).slice(0, 1).forEach((landmarks: any[]) => {
           const indexFingerTip = landmarks[8];
           if (!indexFingerTip) return;
-          trailsRef.current[0].push({ x: 1 - indexFingerTip.x, y: indexFingerTip.y, t: now });
+          const raw = { x: 1 - indexFingerTip.x, y: indexFingerTip.y };
+          const previous = smoothedFingerRef.current;
+          // A light, velocity-aware smoothing keeps the tip stable without making it feel delayed.
+          const distance = previous ? Math.hypot(raw.x - previous.x, raw.y - previous.y) : 1;
+          const follow = distance > .075 ? .82 : .48;
+          const point = previous ? { x: previous.x + (raw.x - previous.x) * follow, y: previous.y + (raw.y - previous.y) * follow } : raw;
+          smoothedFingerRef.current = point; lastFingerSeenRef.current = now;
+          trailsRef.current[0].push({ ...point, t: now });
           trailsRef.current[0] = trailsRef.current[0].filter((point) => now - point.t < 230).slice(-12);
         });
       });
@@ -144,10 +155,12 @@ export default function FruitGame() {
   useEffect(() => {
     let disposed = false;
     const track = async () => {
-      if (!disposed && cameraOn && mediaPipeRef.current && videoRef.current?.readyState === 4 && !trackingBusyRef.current) {
-        trackingBusyRef.current = true; try { await mediaPipeRef.current.send({ image: videoRef.current }); } catch {} trackingBusyRef.current = false;
+      const video = videoRef.current;
+      if (!disposed && cameraOn && mediaPipeRef.current && video?.readyState === 4 && !trackingBusyRef.current && video.currentTime !== lastVideoTimeRef.current) {
+        lastVideoTimeRef.current = video.currentTime;
+        trackingBusyRef.current = true; try { await mediaPipeRef.current.send({ image: video }); } catch {} trackingBusyRef.current = false;
       }
-      if (!disposed) window.setTimeout(track, 48);
+      if (!disposed) window.requestAnimationFrame(track);
     };
     track(); return () => { disposed = true; };
   }, [cameraOn]);
@@ -165,8 +178,8 @@ export default function FruitGame() {
     canvas.addEventListener('pointermove', pointerMove); window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp);
 
     const spawn = (width: number, height: number, now: number) => {
-      const count = Math.random() > 0.58 ? 2 : 1;
-      for (let i = 0; i < count; i++) { const bomb = scoreRef.current > 50 && Math.random() < 0.09; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.14 + Math.random() * 0.72), y: height + 45, vx: width * (-0.12 + Math.random() * 0.24), vy: -height * (0.76 + Math.random() * 0.2), radius: Math.max(32, width * 0.045), rotation: Math.random() * 4, spin: -2 + Math.random() * 4, sliced: false, bomb }); }
+      const count = Math.random() > 0.42 ? 2 : 1;
+      for (let i = 0; i < count; i++) { const bomb = scoreRef.current >= 20 && Math.random() < 0.14; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.13 + Math.random() * 0.74), y: height + 48, vx: width * (-0.13 + Math.random() * 0.26), vy: -height * (1.08 + Math.random() * 0.22), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: -2 + Math.random() * 4, sliced: false, bomb }); }
       lastSpawnRef.current = now;
     };
     const addMenuFruitBackdrop = (width: number, height: number) => {
@@ -198,7 +211,7 @@ export default function FruitGame() {
       if (modeRef.current === 'playing') {
         const remaining = Math.max(0, 60 - (time - gameStartedRef.current) / 1000); setTimeLeft(Math.ceil(remaining));
         if (remaining <= 0 || livesRef.current <= 0) finish();
-        if (time - lastSpawnRef.current > 980 / difficulty) spawn(width, height, time);
+        if (time - lastSpawnRef.current > 760 / difficulty) spawn(width, height, time);
         if (keys.size) {
           const speed = 0.7 * dt; if (keys.has('ArrowLeft') || keys.has('a')) keyboardPoint.x -= speed; if (keys.has('ArrowRight') || keys.has('d')) keyboardPoint.x += speed; if (keys.has('ArrowUp') || keys.has('w')) keyboardPoint.y -= speed; if (keys.has('ArrowDown') || keys.has('s')) keyboardPoint.y += speed;
           keyboardPoint.x = Math.max(0, Math.min(1, keyboardPoint.x)); keyboardPoint.y = Math.max(0, Math.min(1, keyboardPoint.y)); trailsRef.current[0].push({ ...keyboardPoint, t: time });
@@ -218,6 +231,8 @@ export default function FruitGame() {
       fruitRef.current.forEach((fruit) => { ctx.save(); ctx.translate(fruit.x, fruit.y); ctx.rotate(fruit.rotation); ctx.globalAlpha = fruit.decorative ? .5 : 1; ctx.shadowColor = fruit.bomb ? '#ff4d4d' : 'rgba(0,0,0,.62)'; ctx.shadowBlur = fruit.bomb ? 24 : 18; drawFruit(fruit); ctx.restore(); });
       particleRef.current.forEach((p) => { p.life -= dt * 1.8; p.vy += 260 * dt; p.x += p.vx * dt; p.y += p.vy * dt; ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 2 + p.life * 4, 0, Math.PI * 2); ctx.fill(); }); ctx.globalAlpha = 1; particleRef.current = particleRef.current.filter((p) => p.life > 0);
       trailsRef.current.forEach((trail, trailIndex) => { if (trail.length < 2) return; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; for (let i = 1; i < trail.length; i++) { const alpha = i / trail.length; ctx.strokeStyle = trailIndex ? `rgba(255,94,184,${alpha})` : `rgba(183,255,77,${alpha})`; ctx.lineWidth = 2 + alpha * 9; ctx.beginPath(); ctx.moveTo(trail[i - 1].x * width, trail[i - 1].y * height); ctx.lineTo(trail[i].x * width, trail[i].y * height); ctx.stroke(); } });
+      const activeFinger = trailsRef.current[0].at(-1);
+      if (cameraOn && activeFinger && time - activeFinger.t < 180) { ctx.save(); ctx.translate(activeFinger.x * width, activeFinger.y * height); ctx.strokeStyle = '#d8ff90'; ctx.fillStyle = 'rgba(183,255,77,.16)'; ctx.lineWidth = 2; ctx.shadowColor = '#b7ff4d'; ctx.shadowBlur = 18; ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.beginPath(); ctx.arc(0, 0, 3.5, 0, Math.PI * 2); ctx.fillStyle = '#f1ffe0'; ctx.fill(); ctx.restore(); }
       if (debug) { ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(12, height - 62, 210, 48); ctx.fillStyle = '#b7ff4d'; ctx.font = '12px ui-monospace, monospace'; ctx.textAlign = 'left'; ctx.fillText(`FPS ${Math.round(1 / Math.max(dt, .001))}  OBJECTS ${fruitRef.current.length}`, 24, height - 38); ctx.fillText(`HANDS ${trailsRef.current.filter((t) => t.length > 1).length}  MODE ${cameraOn ? 'CAM' : 'POINTER'}`, 24, height - 20); }
       frameRef.current = requestAnimationFrame(draw);
     };
