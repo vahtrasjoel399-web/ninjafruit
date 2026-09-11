@@ -54,7 +54,7 @@ export default function FruitGame() {
   const mediaPipeRef = useRef<any>(null);
   const trackingBusyRef = useRef(false);
   const lastVideoTimeRef = useRef(-1);
-  const smoothedFingerRef = useRef<{ x: number; y: number } | null>(null);
+  const smoothedFingerRef = useRef<{ x: number; y: number; t: number; vx: number; vy: number } | null>(null);
   const lastFingerSeenRef = useRef(0);
   const gestureActiveRef = useRef(false);
   const audioRef = useRef<AudioContext | null>(null);
@@ -125,23 +125,35 @@ export default function FruitGame() {
       }
       const Hands = (window as any).Hands;
       const hands = new Hands({ locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-      hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.38, minTrackingConfidence: 0.38 });
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.42, minTrackingConfidence: 0.42 });
       hands.onResults((results: any) => {
         const now = performance.now();
         const landmarks = results.multiHandLandmarks?.[0];
         const indexFingerTip = landmarks?.[8], middleFingerTip = landmarks?.[12];
-        const joined = Boolean(indexFingerTip && middleFingerTip && Math.hypot(indexFingerTip.x - middleFingerTip.x, indexFingerTip.y - middleFingerTip.y) < .075);
-        if (gestureActiveRef.current !== joined) { gestureActiveRef.current = joined; setGestureDetected(joined); }
-        if (!joined || !indexFingerTip || !middleFingerTip) { trailsRef.current[0] = []; smoothedFingerRef.current = null; return; }
+        const palmWidth = landmarks ? Math.hypot(landmarks[5].x - landmarks[17].x, landmarks[5].y - landmarks[17].y) : .16;
+        const tipDistance = indexFingerTip && middleFingerTip ? Math.hypot(indexFingerTip.x - middleFingerTip.x, indexFingerTip.y - middleFingerTip.y) : Infinity;
+        // Hysteresis keeps the gesture locked when the camera briefly loses a fingertip.
+        const joinLimit = palmWidth * (gestureActiveRef.current ? .78 : .56);
+        const joined = Boolean(indexFingerTip && middleFingerTip && tipDistance < joinLimit);
+        const keepPrevious = !joined && gestureActiveRef.current && now - lastFingerSeenRef.current < 130;
+        const activeGesture = joined || keepPrevious;
+        if (gestureActiveRef.current !== activeGesture) { gestureActiveRef.current = activeGesture; setGestureDetected(activeGesture); }
+        if (!joined || !indexFingerTip || !middleFingerTip) {
+          if (keepPrevious) return;
+          trailsRef.current[0] = []; smoothedFingerRef.current = null; return;
+        }
         const raw = { x: 1 - (indexFingerTip.x + middleFingerTip.x) / 2, y: (indexFingerTip.y + middleFingerTip.y) / 2 };
-          const previous = smoothedFingerRef.current;
-          // A light, velocity-aware smoothing keeps the tip stable without making it feel delayed.
-          const distance = previous ? Math.hypot(raw.x - previous.x, raw.y - previous.y) : 1;
-          const follow = distance > .075 ? .82 : .48;
-          const point = previous ? { x: previous.x + (raw.x - previous.x) * follow, y: previous.y + (raw.y - previous.y) * follow } : raw;
-          smoothedFingerRef.current = point; lastFingerSeenRef.current = now;
-          trailsRef.current[0].push({ ...point, t: now });
-          trailsRef.current[0] = trailsRef.current[0].filter((point) => now - point.t < 230).slice(-12);
+        const previous = smoothedFingerRef.current;
+        const dt = previous ? Math.max(.016, Math.min(.1, (now - previous.t) / 1000)) : .033;
+        const rawSpeed = previous ? Math.hypot(raw.x - previous.x, raw.y - previous.y) / dt : 3;
+        // Slow movement is stabilized; fast swipes follow almost immediately.
+        const follow = Math.max(.36, Math.min(.93, .36 + rawSpeed * .075));
+        const x = previous ? previous.x + (raw.x - previous.x) * follow : raw.x;
+        const y = previous ? previous.y + (raw.y - previous.y) * follow : raw.y;
+        const point = { x, y, t: now, vx: previous ? (x - previous.x) / dt : 0, vy: previous ? (y - previous.y) / dt : 0 };
+        smoothedFingerRef.current = point; lastFingerSeenRef.current = now;
+        trailsRef.current[0].push({ x, y, t: now });
+        trailsRef.current[0] = trailsRef.current[0].filter((trackedPoint) => now - trackedPoint.t < 230).slice(-12);
       });
       mediaPipeRef.current = hands;
     } catch { stopCamera(); setCameraStatus('error'); }
