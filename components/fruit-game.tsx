@@ -7,12 +7,18 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 
 type GameMode = 'ready' | 'playing' | 'paused' | 'over';
+type GameVariant = 'classic' | 'zen' | 'arcade';
 type Point = { x: number; y: number; t: number };
 type Fruit = { id: number; kind: string; x: number; y: number; vx: number; vy: number; radius: number; rotation: number; spin: number; sliced: boolean; bomb: boolean; decorative?: boolean };
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string; size?: number; explosive?: boolean };
 
 const FRUITS = ['🍉', '🍊', '🍋', '🍏', '🍑', '🥝', '🍓'];
 const COLORS = ['#ff4d6d', '#ff9e00', '#ffe66d', '#55d66b', '#ff8fab', '#9ad45b'];
+const VARIANTS: Record<GameVariant, { label: string; duration: number | null; description: string }> = {
+  classic: { label: 'КЛАССИКА', duration: null, description: '3 промаха или бомба — конец игры' },
+  zen: { label: 'ДЗЕН', duration: 90, description: '90 секунд · без бомб' },
+  arcade: { label: 'АРКАДА', duration: 60, description: '60 секунд · бомба −10 очков' },
+};
 
 const FRUIT_STYLES: Record<string, { base: string; accent: string; seed?: string }> = {
   '🍉': { base: '#f24263', accent: '#73d45a', seed: '#35131d' }, '🍊': { base: '#ff9e22', accent: '#ffd36b' },
@@ -44,6 +50,7 @@ export default function FruitGame() {
   const lastSliceRef = useRef(0);
   const lastTimeRef = useRef(0);
   const gameStartedRef = useRef(0);
+  const variantRef = useRef<GameVariant>('arcade');
   const mediaPipeRef = useRef<any>(null);
   const trackingBusyRef = useRef(false);
   const lastVideoTimeRef = useRef(-1);
@@ -52,6 +59,7 @@ export default function FruitGame() {
   const gestureActiveRef = useRef(false);
   const audioRef = useRef<AudioContext | null>(null);
   const [mode, setMode] = useState<GameMode>('ready');
+  const [variant, setVariant] = useState<GameVariant>('arcade');
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
   const [lives, setLives] = useState(3);
@@ -81,16 +89,18 @@ export default function FruitGame() {
   }, [soundOn]);
 
   const startGame = useCallback(() => {
+    const duration = VARIANTS[variantRef.current].duration;
     fruitRef.current = []; particleRef.current = []; trailsRef.current = [[], []];
     scoreRef.current = 0; livesRef.current = 3; comboRef.current = 0;
     lastSpawnRef.current = performance.now() - 1200; gameStartedRef.current = performance.now();
-    setScore(0); setLives(3); setCombo(0); setTimeLeft(60); updateMode('playing'); ping(520, 0.12);
+    setScore(0); setLives(3); setCombo(0); setTimeLeft(duration || 0); updateMode('playing'); ping(520, 0.12);
   }, [ping]);
 
   const returnToMenu = useCallback(() => {
     fruitRef.current = []; particleRef.current = []; trailsRef.current = [[], []];
     setCombo(0); updateMode('ready');
   }, []);
+  const chooseVariant = (next: GameVariant) => { variantRef.current = next; setVariant(next); };
 
   const stopCamera = useCallback(() => {
     const stream = videoRef.current?.srcObject as MediaStream | null;
@@ -181,10 +191,11 @@ export default function FruitGame() {
     canvas.addEventListener('pointermove', pointerMove); window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp);
 
     const spawn = (width: number, height: number, now: number, elapsed: number) => {
-      const wave = Math.min(3, Math.floor(elapsed / 18));
-      const count = 1 + wave + (Math.random() > .42 ? 1 : 0);
-      const bombChance = elapsed < 9 ? 0 : Math.min(.3, .06 + (elapsed - 9) * .006);
-      for (let i = 0; i < count; i++) { const bomb = Math.random() < bombChance; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.11 + Math.random() * 0.78), y: height + 48, vx: width * (-0.15 + Math.random() * 0.3), vy: -height * (1.55 + Math.random() * 0.18 + wave * .04), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: -2 + Math.random() * 4, sliced: false, bomb }); }
+      // A repeating tempo wave: calm → faster → calm. It never turns into an unreadable fruit wall.
+      const tempo = (Math.sin(elapsed * .16 - Math.PI / 2) + 1) / 2;
+      const count = Math.random() < (.07 + tempo * .12) ? 2 : 1;
+      const bombChance = variantRef.current === 'zen' || elapsed < 12 ? 0 : .035 + tempo * .08;
+      for (let i = 0; i < count; i++) { const bomb = Math.random() < bombChance; const direction = Math.random() < .5 ? -1 : 1; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.16 + Math.random() * 0.68), y: height + 48, vx: width * (-0.11 + Math.random() * 0.22), vy: -height * (1.5 + Math.random() * .16 + tempo * .12), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: direction * (3.2 + Math.random() * 2.5), sliced: false, bomb }); }
       lastSpawnRef.current = now;
     };
     const explodeBomb = (x: number, y: number) => {
@@ -227,21 +238,23 @@ export default function FruitGame() {
       if (modeRef.current === 'ready' && !fruitRef.current.length) addMenuFruitBackdrop(width, height);
 
       if (modeRef.current === 'playing') {
-        const remaining = Math.max(0, 60 - (time - gameStartedRef.current) / 1000); setTimeLeft(Math.ceil(remaining));
-        if (remaining <= 0 || livesRef.current <= 0) finish();
+        const duration = VARIANTS[variantRef.current].duration;
+        const remaining = duration === null ? Infinity : Math.max(0, duration - (time - gameStartedRef.current) / 1000); setTimeLeft(Number.isFinite(remaining) ? Math.ceil(remaining) : 0);
+        if ((Number.isFinite(remaining) && remaining <= 0) || (variantRef.current === 'classic' && livesRef.current <= 0)) finish();
         const elapsed = (time - gameStartedRef.current) / 1000;
-        const spawnInterval = Math.max(280, 900 / (difficulty * (1 + elapsed / 28)));
+        const tempo = (Math.sin(elapsed * .16 - Math.PI / 2) + 1) / 2;
+        const spawnInterval = (1120 - tempo * 470) / difficulty;
         if (time - lastSpawnRef.current > spawnInterval) spawn(width, height, time, elapsed);
         if (keys.size) {
           const speed = 0.7 * dt; if (keys.has('ArrowLeft') || keys.has('a')) keyboardPoint.x -= speed; if (keys.has('ArrowRight') || keys.has('d')) keyboardPoint.x += speed; if (keys.has('ArrowUp') || keys.has('w')) keyboardPoint.y -= speed; if (keys.has('ArrowDown') || keys.has('s')) keyboardPoint.y += speed;
           keyboardPoint.x = Math.max(0, Math.min(1, keyboardPoint.x)); keyboardPoint.y = Math.max(0, Math.min(1, keyboardPoint.y)); trailsRef.current[0].push({ ...keyboardPoint, t: time });
         }
-        fruitRef.current.forEach((fruit) => { if (fruit.decorative) return; fruit.vy += height * 1.12 * dt; fruit.x += fruit.vx * dt; fruit.y += fruit.vy * dt; fruit.rotation += fruit.spin * dt; if (!fruit.sliced && fruit.y > height + fruit.radius * 2 && fruit.vy > 0) { fruit.sliced = true; if (!fruit.bomb) { livesRef.current -= 1; setLives(livesRef.current); comboRef.current = 0; setCombo(0); ping(110, 0.15); } } });
+        fruitRef.current.forEach((fruit) => { if (fruit.decorative) return; fruit.vy += height * 1.12 * dt; fruit.x += fruit.vx * dt; fruit.y += fruit.vy * dt; fruit.rotation += fruit.spin * dt; if (!fruit.sliced && fruit.y > height + fruit.radius * 2 && fruit.vy > 0) { fruit.sliced = true; if (!fruit.bomb && variantRef.current === 'classic') { livesRef.current -= 1; setLives(livesRef.current); comboRef.current = 0; setCombo(0); ping(110, 0.15); } } });
         trailsRef.current.forEach((trail) => {
           const recent = trail.filter((point) => time - point.t < 230); trail.splice(0, trail.length, ...recent); if (trail.length < 2) return;
           const a = trail[trail.length - 2], b = trail[trail.length - 1]; const speed = Math.hypot((b.x - a.x) * width, (b.y - a.y) * height) / Math.max(8, b.t - a.t); if (speed < 0.48) return;
           fruitRef.current.forEach((fruit) => { if (fruit.sliced || segmentDistance(a, b, fruit.x / width, fruit.y / height) > fruit.radius / Math.min(width, height)) return; fruit.sliced = true;
-            if (fruit.bomb) { livesRef.current = Math.max(0, livesRef.current - 1); setLives(livesRef.current); comboRef.current = 0; setCombo(0); explodeBomb(fruit.x, fruit.y); ping(85, 0.25); }
+            if (fruit.bomb) { comboRef.current = 0; setCombo(0); explodeBomb(fruit.x, fruit.y); if (variantRef.current === 'classic') { livesRef.current = 0; setLives(0); } else { scoreRef.current = Math.max(0, scoreRef.current - 10); setScore(scoreRef.current); } ping(85, 0.25); }
             else { comboRef.current = time - lastSliceRef.current < 850 ? comboRef.current + 1 : 1; lastSliceRef.current = time; scoreRef.current += 10 * Math.min(comboRef.current, 5); setScore(scoreRef.current); setCombo(comboRef.current); ping(460 + comboRef.current * 55); const color = COLORS[Math.floor(Math.random() * COLORS.length)]; for (let n = 0; n < 14; n++) particleRef.current.push({ x: fruit.x, y: fruit.y, vx: -140 + Math.random() * 280, vy: -180 + Math.random() * 250, life: 1, color }); }
           });
         });
@@ -273,11 +286,11 @@ export default function FruitGame() {
     <section className="game-layout" id="game">
       <div className="stat-card score-card"><span>СЧЁТ</span><strong>{score.toString().padStart(4, '0')}</strong><small>ЛУЧШИЙ {best.toString().padStart(4, '0')}</small></div>
       <div className="stage-wrap">
-        <div className="stage-topline"><span>АРКАДНЫЙ ЗАБЕГ · {timeLeft} СЕК</span><div className="lives" aria-label={`${lives} жизней`}>{[0, 1, 2].map((heart) => <span key={heart} className={heart >= lives ? 'lost' : ''}>♥</span>)}</div></div>
+        <div className="stage-topline"><span>{VARIANTS[variant].label} · {VARIANTS[variant].duration === null ? '∞' : `${timeLeft} СЕК`}</span><div className="lives" aria-label={`${lives} жизней`}>{variant === 'classic' && [0, 1, 2].map((heart) => <span key={heart} className={heart >= lives ? 'lost' : ''}>♥</span>)}</div></div>
         <div className="stage">
           <video ref={videoRef} className={`camera-feed ${cameraOn ? 'visible' : ''}`} muted playsInline aria-hidden="true" /><canvas ref={canvasRef} aria-label="Игровое поле Fruit Rush. Двигайте мышью, пальцем или рукой перед камерой." />
           {mode !== 'playing' && <div className="game-overlay">
-            {mode === 'ready' && <><div className="eyebrow"><Zap size={15} /> РЕАКЦИЯ. РИТМ. РАЗРЕЗ.</div><h1>РЕЖЬ ФРУКТЫ<br /><em>ДВИЖЕНИЕМ</em></h1><p>Соедини <b>указательный и средний пальцы</b> перед камерой — только этот жест режет фрукты. Или используй мышь.</p><button className="primary-button" onClick={startGame}><Play size={18} fill="currentColor" /> НАЧАТЬ ИГРУ <ChevronRight size={18} /></button><button className="camera-button" onClick={cameraOn ? stopCamera : startCamera}>{cameraOn ? <CameraOff size={17} /> : <Camera size={17} />} {cameraOn ? 'Выключить камеру' : 'Играть с камерой'}</button></>}
+            {mode === 'ready' && <><div className="eyebrow"><Zap size={15} /> РЕАКЦИЯ. РИТМ. РАЗРЕЗ.</div><h1>РЕЖЬ ФРУКТЫ<br /><em>ДВИЖЕНИЕМ</em></h1><p>Соедини <b>указательный и средний пальцы</b> перед камерой — только этот жест режет фрукты. Или используй мышь.</p><div className="variant-switch">{(Object.keys(VARIANTS) as GameVariant[]).map((item) => <button key={item} className={variant === item ? 'selected' : ''} onClick={() => chooseVariant(item)}><b>{VARIANTS[item].label}</b><small>{VARIANTS[item].description}</small></button>)}</div><button className="primary-button" onClick={startGame}><Play size={18} fill="currentColor" /> НАЧАТЬ ИГРУ <ChevronRight size={18} /></button><button className="camera-button" onClick={cameraOn ? stopCamera : startCamera}>{cameraOn ? <CameraOff size={17} /> : <Camera size={17} />} {cameraOn ? 'Выключить камеру' : 'Играть с камерой'}</button></>}
             {mode === 'paused' && <><div className="eyebrow">ПАУЗА</div><h1>ПЕРЕВЕДИ<br /><em>ДЫХАНИЕ</em></h1><button className="primary-button" onClick={togglePause}><Play size={18} /> ПРОДОЛЖИТЬ</button></>}
             {mode === 'over' && <><div className="eyebrow">ЗАБЕГ ЗАВЕРШЁН</div><h1>{score}<br /><em>ОЧКОВ</em></h1><p>{score >= best && score > 0 ? 'Новый рекорд. Очень остро!' : `Лучший результат: ${best}`}</p><button className="primary-button" onClick={startGame}><RotateCcw size={18} /> ЕЩЁ РАЗ</button></>}
           </div>}
