@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, CameraOff, ChevronRight, CircleHelp, House, Maximize2, Pause, Play, RotateCcw, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
+import { Camera, CameraOff, ChevronRight, CircleHelp, House, MonitorUp, Pause, Play, RotateCcw, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
@@ -49,6 +49,7 @@ export default function FruitGame() {
   const lastVideoTimeRef = useRef(-1);
   const smoothedFingerRef = useRef<{ x: number; y: number } | null>(null);
   const lastFingerSeenRef = useRef(0);
+  const gestureActiveRef = useRef(false);
   const audioRef = useRef<AudioContext | null>(null);
   const [mode, setMode] = useState<GameMode>('ready');
   const [score, setScore] = useState(0);
@@ -58,6 +59,7 @@ export default function FruitGame() {
   const [timeLeft, setTimeLeft] = useState(60);
   const [cameraOn, setCameraOn] = useState(false);
   const [cameraStatus, setCameraStatus] = useState<'off' | 'loading' | 'ready' | 'error'>('off');
+  const [gestureDetected, setGestureDetected] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
   const [debug, setDebug] = useState(false);
   const [difficulty, setDifficulty] = useState(1);
@@ -95,7 +97,7 @@ export default function FruitGame() {
     stream?.getTracks().forEach((track) => track.stop());
     if (videoRef.current) videoRef.current.srcObject = null;
     mediaPipeRef.current?.close?.(); mediaPipeRef.current = null;
-    smoothedFingerRef.current = null; lastVideoTimeRef.current = -1;
+    smoothedFingerRef.current = null; lastVideoTimeRef.current = -1; gestureActiveRef.current = false; setGestureDetected(false);
     setCameraOn(false); setCameraStatus('off');
   }, []);
 
@@ -116,10 +118,12 @@ export default function FruitGame() {
       hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.38, minTrackingConfidence: 0.38 });
       hands.onResults((results: any) => {
         const now = performance.now();
-        (results.multiHandLandmarks || []).slice(0, 1).forEach((landmarks: any[]) => {
-          const indexFingerTip = landmarks[8];
-          if (!indexFingerTip) return;
-          const raw = { x: 1 - indexFingerTip.x, y: indexFingerTip.y };
+        const landmarks = results.multiHandLandmarks?.[0];
+        const indexFingerTip = landmarks?.[8], middleFingerTip = landmarks?.[12];
+        const joined = Boolean(indexFingerTip && middleFingerTip && Math.hypot(indexFingerTip.x - middleFingerTip.x, indexFingerTip.y - middleFingerTip.y) < .075);
+        if (gestureActiveRef.current !== joined) { gestureActiveRef.current = joined; setGestureDetected(joined); }
+        if (!joined || !indexFingerTip || !middleFingerTip) { trailsRef.current[0] = []; smoothedFingerRef.current = null; return; }
+        const raw = { x: 1 - (indexFingerTip.x + middleFingerTip.x) / 2, y: (indexFingerTip.y + middleFingerTip.y) / 2 };
           const previous = smoothedFingerRef.current;
           // A light, velocity-aware smoothing keeps the tip stable without making it feel delayed.
           const distance = previous ? Math.hypot(raw.x - previous.x, raw.y - previous.y) : 1;
@@ -128,7 +132,6 @@ export default function FruitGame() {
           smoothedFingerRef.current = point; lastFingerSeenRef.current = now;
           trailsRef.current[0].push({ ...point, t: now });
           trailsRef.current[0] = trailsRef.current[0].filter((point) => now - point.t < 230).slice(-12);
-        });
       });
       mediaPipeRef.current = hands;
     } catch { stopCamera(); setCameraStatus('error'); }
@@ -179,7 +182,7 @@ export default function FruitGame() {
 
     const spawn = (width: number, height: number, now: number) => {
       const count = Math.random() > 0.42 ? 2 : 1;
-      for (let i = 0; i < count; i++) { const bomb = scoreRef.current >= 20 && Math.random() < 0.14; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.13 + Math.random() * 0.74), y: height + 48, vx: width * (-0.13 + Math.random() * 0.26), vy: -height * (1.08 + Math.random() * 0.22), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: -2 + Math.random() * 4, sliced: false, bomb }); }
+      for (let i = 0; i < count; i++) { const bomb = scoreRef.current >= 20 && Math.random() < 0.14; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.13 + Math.random() * 0.74), y: height + 48, vx: width * (-0.13 + Math.random() * 0.26), vy: -height * (1.55 + Math.random() * 0.18), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: -2 + Math.random() * 4, sliced: false, bomb }); }
       lastSpawnRef.current = now;
     };
     const addMenuFruitBackdrop = (width: number, height: number) => {
@@ -241,7 +244,7 @@ export default function FruitGame() {
   }, [cameraOn, debug, difficulty, ping]);
 
   const togglePause = () => updateMode(mode === 'playing' ? 'paused' : 'playing');
-  const cameraLabel = cameraStatus === 'ready' ? 'Камера активна' : cameraStatus === 'loading' ? 'Подключаем камеру…' : cameraStatus === 'error' ? 'Камера недоступна' : 'Мышь / касание';
+  const cameraLabel = cameraStatus === 'ready' ? (gestureDetected ? 'Жест найден — режь!' : 'Соедини 2 пальца') : cameraStatus === 'loading' ? 'Подключаем камеру…' : cameraStatus === 'error' ? 'Камера недоступна' : 'Мышь / касание';
 
   return <main className="game-shell">
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
@@ -257,7 +260,7 @@ export default function FruitGame() {
         <div className="stage">
           <video ref={videoRef} className={`camera-feed ${cameraOn ? 'visible' : ''}`} muted playsInline aria-hidden="true" /><canvas ref={canvasRef} aria-label="Игровое поле Fruit Rush. Двигайте мышью, пальцем или рукой перед камерой." />
           {mode !== 'playing' && <div className="game-overlay">
-            {mode === 'ready' && <><div className="eyebrow"><Zap size={15} /> РЕАКЦИЯ. РИТМ. РАЗРЕЗ.</div><h1>РЕЖЬ ФРУКТЫ<br /><em>ДВИЖЕНИЕМ</em></h1><p>Проведи <b>указательным пальцем</b> перед камерой или используй мышь. Быстрые серии умножают очки.</p><button className="primary-button" onClick={startGame}><Play size={18} fill="currentColor" /> НАЧАТЬ ИГРУ <ChevronRight size={18} /></button><button className="camera-button" onClick={cameraOn ? stopCamera : startCamera}>{cameraOn ? <CameraOff size={17} /> : <Camera size={17} />} {cameraOn ? 'Выключить камеру' : 'Играть с камерой'}</button></>}
+            {mode === 'ready' && <><div className="eyebrow"><Zap size={15} /> РЕАКЦИЯ. РИТМ. РАЗРЕЗ.</div><h1>РЕЖЬ ФРУКТЫ<br /><em>ДВИЖЕНИЕМ</em></h1><p>Соедини <b>указательный и средний пальцы</b> перед камерой — только этот жест режет фрукты. Или используй мышь.</p><button className="primary-button" onClick={startGame}><Play size={18} fill="currentColor" /> НАЧАТЬ ИГРУ <ChevronRight size={18} /></button><button className="camera-button" onClick={cameraOn ? stopCamera : startCamera}>{cameraOn ? <CameraOff size={17} /> : <Camera size={17} />} {cameraOn ? 'Выключить камеру' : 'Играть с камерой'}</button></>}
             {mode === 'paused' && <><div className="eyebrow">ПАУЗА</div><h1>ПЕРЕВЕДИ<br /><em>ДЫХАНИЕ</em></h1><button className="primary-button" onClick={togglePause}><Play size={18} /> ПРОДОЛЖИТЬ</button></>}
             {mode === 'over' && <><div className="eyebrow">ЗАБЕГ ЗАВЕРШЁН</div><h1>{score}<br /><em>ОЧКОВ</em></h1><p>{score >= best && score > 0 ? 'Новый рекорд. Очень остро!' : `Лучший результат: ${best}`}</p><button className="primary-button" onClick={startGame}><RotateCcw size={18} /> ЕЩЁ РАЗ</button></>}
           </div>}
@@ -267,10 +270,10 @@ export default function FruitGame() {
       </div>
       <aside className="side-panel"><div><span className="panel-label">МНОЖИТЕЛЬ</span><strong className="combo-number">×{Math.max(1, Math.min(combo, 5))}</strong><div className="combo-track"><i style={{ width: `${Math.min(combo, 5) * 20}%` }} /></div><small>Режь без пауз, чтобы удержать серию</small></div><div className="separator" /><div className="mini-control"><span><Camera size={17} /> Камера</span><button onClick={cameraOn ? stopCamera : startCamera} aria-pressed={cameraOn}>{cameraOn ? 'Вкл' : 'Выкл'}</button></div><div className="mini-control"><span>{soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />} Звук</span><button onClick={() => setSoundOn(!soundOn)} aria-pressed={soundOn}>{soundOn ? 'Вкл' : 'Выкл'}</button></div><div className="mini-control menu-control"><span><House size={17} /> Меню</span><button onClick={returnToMenu}>Выйти</button></div></aside>
     </section>
-    <footer className="page-footer"><span>Обработка камеры происходит только в браузере.</span><button onClick={() => document.documentElement.requestFullscreen?.()}><Maximize2 size={15} /> На весь экран</button></footer>
+    <footer className="page-footer"><span>Подключи ноутбук по HDMI или включи трансляцию телефона — трекер остаётся на этом устройстве.</span><button onClick={() => document.documentElement.requestFullscreen?.()}><MonitorUp size={15} /> На ТВ / полный экран</button></footer>
     <Dialog open={settingsOpen || helpOpen} onOpenChange={(open) => { if (!open) { setSettingsOpen(false); setHelpOpen(false); } }}>
       <DialogContent className="modal">
-        {helpOpen ? <><span className="modal-kicker">КАК ИГРАТЬ</span><DialogTitle className="modal-title">Твой палец — лезвие</DialogTitle><ol className="how-list"><li><b>1</b><span>Разреши доступ к камере и держи в кадре <b>указательный палец</b> — либо используй мышь.</span></li><li><b>2</b><span>Делай быстрые взмахи через фрукты. Медленные движения не считаются.</span></li><li><b>3</b><span>Не пропускай фрукты и обходи бомбы. Серии дают больше очков.</span></li></ol></> : <><span className="modal-kicker">НАСТРОЙКИ</span><DialogTitle className="modal-title">Подстрой игру</DialogTitle><div className="setting-row"><span><b>Камера</b><small>Управление указательным пальцем</small></span><Switch checked={cameraOn} onCheckedChange={(checked) => checked ? startCamera() : stopCamera()} aria-label="Камера" /></div><div className="setting-row"><span><b>Звук</b><small>Сигналы разреза и промаха</small></span><Switch checked={soundOn} onCheckedChange={setSoundOn} aria-label="Звук" /></div><div className="setting-range"><span><b>Сложность</b><small>{difficulty === 1 ? 'Спокойно' : difficulty < 1.6 ? 'Быстро' : 'Турбо'}</small></span><Slider min={1} max={2} step={0.5} value={[difficulty]} onValueChange={(value) => setDifficulty(value[0])} aria-label="Сложность" /></div><div className="setting-row"><span><b>Режим разработчика</b><small>FPS, объекты и отслеживание</small></span><Switch checked={debug} onCheckedChange={setDebug} aria-label="Режим разработчика" /></div></>}
+        {helpOpen ? <><span className="modal-kicker">КАК ИГРАТЬ</span><DialogTitle className="modal-title">Два пальца — лезвие</DialogTitle><ol className="how-list"><li><b>1</b><span>Разреши доступ к камере и соедини в кадре <b>указательный и средний пальцы</b> — либо используй мышь.</span></li><li><b>2</b><span>Делай быстрые взмахи через фрукты. Медленные движения не считаются.</span></li><li><b>3</b><span>Не пропускай фрукты и обходи бомбы. Серии дают больше очков.</span></li></ol></> : <><span className="modal-kicker">НАСТРОЙКИ</span><DialogTitle className="modal-title">Подстрой игру</DialogTitle><div className="setting-row"><span><b>Камера</b><small>Жест: указательный + средний палец</small></span><Switch checked={cameraOn} onCheckedChange={(checked) => checked ? startCamera() : stopCamera()} aria-label="Камера" /></div><div className="setting-row"><span><b>Звук</b><small>Сигналы разреза и промаха</small></span><Switch checked={soundOn} onCheckedChange={setSoundOn} aria-label="Звук" /></div><div className="setting-range"><span><b>Сложность</b><small>{difficulty === 1 ? 'Спокойно' : difficulty < 1.6 ? 'Быстро' : 'Турбо'}</small></span><Slider min={1} max={2} step={0.5} value={[difficulty]} onValueChange={(value) => setDifficulty(value[0])} aria-label="Сложность" /></div><div className="setting-row"><span><b>Режим разработчика</b><small>FPS, объекты и отслеживание</small></span><Switch checked={debug} onCheckedChange={setDebug} aria-label="Режим разработчика" /></div></>}
       </DialogContent>
     </Dialog>
   </main>;
