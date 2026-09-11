@@ -191,11 +191,12 @@ export default function FruitGame() {
     canvas.addEventListener('pointermove', pointerMove); window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp);
 
     const spawn = (width: number, height: number, now: number, elapsed: number) => {
-      // A repeating tempo wave: calm → faster → calm. It never turns into an unreadable fruit wall.
-      const tempo = (Math.sin(elapsed * .16 - Math.PI / 2) + 1) / 2;
-      const count = Math.random() < (.07 + tempo * .12) ? 2 : 1;
-      const bombChance = variantRef.current === 'zen' || elapsed < 12 ? 0 : .035 + tempo * .08;
-      for (let i = 0; i < count; i++) { const bomb = Math.random() < bombChance; const direction = Math.random() < .5 ? -1 : 1; fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.16 + Math.random() * 0.68), y: height + 48, vx: width * (-0.11 + Math.random() * 0.22), vy: -height * (1.5 + Math.random() * .16 + tempo * .12), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: direction * (3.2 + Math.random() * 2.5), sliced: false, bomb }); }
+      // One clear target at a time: a very slow start that gently accelerates through the round.
+      const progress = Math.min(1, elapsed / 60);
+      const bombChance = variantRef.current === 'zen' || elapsed < 25 ? 0 : .025 + progress * .035;
+      const bomb = Math.random() < bombChance;
+      const direction = Math.random() < .5 ? -1 : 1;
+      fruitRef.current.push({ id: idRef.current++, kind: bomb ? '💣' : FRUITS[Math.floor(Math.random() * FRUITS.length)], x: width * (0.16 + Math.random() * 0.68), y: height + 48, vx: width * (-0.11 + Math.random() * 0.22), vy: -height * (1.5 + Math.random() * .16 + progress * .08), radius: Math.max(34, width * 0.048), rotation: Math.random() * 4, spin: direction * (3.2 + Math.random() * 2.5), sliced: false, bomb });
       lastSpawnRef.current = now;
     };
     const explodeBomb = (x: number, y: number) => {
@@ -242,9 +243,10 @@ export default function FruitGame() {
         const remaining = duration === null ? Infinity : Math.max(0, duration - (time - gameStartedRef.current) / 1000); setTimeLeft(Number.isFinite(remaining) ? Math.ceil(remaining) : 0);
         if ((Number.isFinite(remaining) && remaining <= 0) || (variantRef.current === 'classic' && livesRef.current <= 0)) finish();
         const elapsed = (time - gameStartedRef.current) / 1000;
-        const tempo = (Math.sin(elapsed * .16 - Math.PI / 2) + 1) / 2;
-        const spawnInterval = (1120 - tempo * 470) / difficulty;
-        if (time - lastSpawnRef.current > spawnInterval) spawn(width, height, time, elapsed);
+        const progress = Math.min(1, elapsed / 60);
+        const spawnInterval = (3100 - progress * 1000) / difficulty;
+        const hasFlyingFruit = fruitRef.current.some((fruit) => !fruit.decorative && !fruit.sliced);
+        if (!hasFlyingFruit && time - lastSpawnRef.current > spawnInterval) spawn(width, height, time, elapsed);
         if (keys.size) {
           const speed = 0.7 * dt; if (keys.has('ArrowLeft') || keys.has('a')) keyboardPoint.x -= speed; if (keys.has('ArrowRight') || keys.has('d')) keyboardPoint.x += speed; if (keys.has('ArrowUp') || keys.has('w')) keyboardPoint.y -= speed; if (keys.has('ArrowDown') || keys.has('s')) keyboardPoint.y += speed;
           keyboardPoint.x = Math.max(0, Math.min(1, keyboardPoint.x)); keyboardPoint.y = Math.max(0, Math.min(1, keyboardPoint.y)); trailsRef.current[0].push({ ...keyboardPoint, t: time });
